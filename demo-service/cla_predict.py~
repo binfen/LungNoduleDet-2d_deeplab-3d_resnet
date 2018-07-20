@@ -1,0 +1,27 @@
+#-*- coding:utf-8 -*-
+import torch
+from torch.autograd import Variable
+import torch.nn.functional as F
+import numpy as np
+import time
+import os
+import sys
+import json
+from utils import AverageMeter
+
+def predict(data_loader, model, opt):
+    print('classify predict')
+    model.eval()
+    probs=[]
+    preds=[]
+    for i, (inputs,) in enumerate(data_loader):
+        inputs = Variable(inputs, requires_grad=False).type(torch.float32)
+        outputs = model(inputs)
+        outputs = F.softmax(outputs)
+        prob, pred = torch.topk(outputs, k=1)
+        import pdb
+        pdb.set_trace()
+
+        probs.extend(prob.data.cpu().numpy()[:,0].tolist())
+        preds.extend(pred.data.cpu().numpy()[:,0].tolist())
+    return probs, preds

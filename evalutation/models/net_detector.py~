@@ -1,0 +1,140 @@
+import torch
+from torch import nn
+from layers import *
+
+class PostRes(nn.Module):
+    def __init__(self, n_in, n_out, stride = 1):
+        super(PostRes, self).__init__()
+        self.conv1 = nn.Conv3d(n_in, n_out, kernel_size = 3, stride = stride, padding = 1)
+        self.bn1 = nn.BatchNorm3d(n_out)
+        self.relu = nn.ReLU(inplace = True)
+        self.conv2 = nn.Conv3d(n_out, n_out, kernel_size = 3, padding = 1)
+        self.bn2 = nn.BatchNorm3d(n_out)
+
+        if stride != 1 or n_out != n_in:
+            self.shortcut = nn.Sequential(
+                nn.Conv3d(n_in, n_out, kernel_size = 1, stride = stride),
+                nn.BatchNorm3d(n_out))
+        else:
+            self.shortcut = None
+
+    def forward(self, x):
+        residual = x
+        if self.shortcut is not None:
+            residual = self.shortcut(x)
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+        out = self.conv2(out)
+        out = self.bn2(out)
+        
+        out += residual
+        out = self.relu(out)
+        return out
+
+
+class Net(nn.Module):
+    def __init__(self):
+        super(Net, self).__init__()
+        # The first few layers consumes the most memory, so use simple convolution to save memory.
+        # Call these layers preBlock, i.e., before the residual blocks of later layers.
+        self.preBlock = nn.Sequential(
+            nn.Conv3d(1, 24, kernel_size = 1, padding = 0),
+            nn.BatchNorm3d(24),
+            nn.ReLU(inplace = True),
+            nn.Conv3d(24, 24, kernel_size = 3, padding = 1),
+            nn.BatchNorm3d(24),
+            nn.ReLU(inplace = True))
+        
+        # 3 poolings, each pooling downsamples the feature map by a factor 2.
+        # 3 groups of blocks. The first block of each group has one pooling.
+
+        num_blocks_back = [3,3,3]
+        self.forw1 = nn.Sequential(PostRes(24,32), PostRes(32,32))
+        self.forw2 = nn.Sequential(PostRes(32,64),PostRes(64,64))
+        self.forw3 = nn.Sequential(PostRes(64,128),PostRes(128,128),PostRes(128,128))
+        self.forw4 = nn.Sequential(PostRes(128,256),PostRes(256,256),PostRes(256,256))
+
+        self.back4 = nn.Sequential(PostRes(256,128),PostRes(128,128),PostRes(128,128))
+        self.back3 = nn.Sequential(PostRes(128,64),PostRes(64,64),PostRes(64,64))
+        self.back2 = nn.Sequential(PostRes(64,32),PostRes(32,32))
+        self.back1 = nn.Sequential(PostRes(48,24),PostRes(24,24))
+
+        self.maxpool1 = nn.MaxPool3d(kernel_size=2,stride=2,return_indices =False)
+        self.maxpool2 = nn.MaxPool3d(kernel_size=2,stride=2,return_indices =False)
+        self.maxpool3 = nn.MaxPool3d(kernel_size=2,stride=2,return_indices =False)
+        self.maxpool4 = nn.MaxPool3d(kernel_size=2,stride=2,return_indices =False)
+
+        self.unconv4 = nn.Sequential(
+            nn.ConvTranspose3d(256, 128, kernel_size = 2, stride = 2),
+            nn.BatchNorm3d(128),
+            nn.ReLU(inplace = True))
+
+        self.unconv3 = nn.Sequential(
+            nn.ConvTranspose3d(128, 64, kernel_size = 2, stride = 2),
+            nn.BatchNorm3d(64),
+            nn.ReLU(inplace = True))
+
+        self.unconv2 = nn.Sequential(
+            nn.ConvTranspose3d(64, 32, kernel_size = 2, stride = 2),
+            nn.BatchNorm3d(32),
+            nn.ReLU(inplace = True))
+
+        self.unconv1 = nn.Sequential(
+            nn.ConvTranspose3d(32, 24, kernel_size = 2, stride = 2),
+            nn.BatchNorm3d(24),
+            nn.ReLU(inplace = True))
+
+
+        self.drop = nn.Dropout3d(p = 0.2, inplace = False)
+
+        self.output = nn.Sequential(nn.Conv3d(24, 24, kernel_size = 1),
+                                    nn.ReLU(),
+                                    #nn.Dropout3d(p = 0.3),
+                                   nn.Conv3d(24,1, kernel_size = 1))
+
+    def forward(self, x):
+        out = self.preBlock(x)#24
+        out_pool = self.maxpool1(out)
+
+        out1 = self.forw1(out_pool)#32
+        out1_pool = self.maxpool2(out1)
+
+        out2 = self.forw2(out1_pool)#64
+        #out2 = self.drop(out2)
+        out2_pool = self.maxpool3(out2)
+
+        out3 = self.forw3(out2_pool)#128
+        out3_pool = self.maxpool4(out3)
+
+        out4 = self.forw4(out3_pool)#256
+        #out4 = self.drop(out4)
+
+        rev4 = self.unconv4(out4)#128
+        comb4 = self.back4(torch.cat((rev4, out3), 1))#128+128
+        #comb4 = self.drop(comb3)
+
+        rev3 = self.unconv3(comb4)        
+        comb3 = self.back3(torch.cat((rev3, out2), 1))#64+64
+
+        rev2 = self.unconv2(comb3)        
+        comb1 = self.back2(torch.cat((rev2, out1), 1))#32+32
+
+        rev1 = self.unconv1(comb1)        
+        feat = self.back1(torch.cat((rev1, out), 1))#24+24
+
+        feat = self.drop(feat)
+
+        out = self.output(feat)
+        return out
+
+if __name__== '__main__':
+
+    net = Net()
+    net = net.cuda()
+    net = torch.nn.DataParallel(net)
+    data = torch.autograd.Variable(torch.randn(1,1,128,128,128)).cuda()
+    out = net(data)
+    import pdb
+    pdb.set_trace()
+    

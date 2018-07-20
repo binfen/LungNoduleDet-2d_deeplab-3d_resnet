@@ -1,0 +1,19 @@
+# -*- encoding: utf-8 -*-
+'''
+@datatime: '18-6-6 下午8:25'
+
+@author: wowjoy
+'''
+import numpy as np
+import SimpleITK as sitk
+import os
+import cv2
+from time import sleep
+from threading import Thread
+import matplotlib.pyplot as plt
+
+path = os.path.join(os.getcwd(), '../../origin_datas/image')
+names = os.listdir(path)
+for name in names:
+    data = np.load(os.path.join(path,name))
+    print(name,data.shape)

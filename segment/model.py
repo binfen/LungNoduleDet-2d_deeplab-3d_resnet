@@ -1,0 +1,13 @@
+import torch
+from torch import nn
+import os,sys
+sys.path.append(os.path.abspath('*'))
+from models import deeplab
+
+def generate_model(opt):
+    assert opt.model in ['deeplab']
+    model = deeplab.Net(in_channel=opt.in_channel, num_classes=opt.n_classes)
+    if not opt.no_cuda:
+        model = model.cuda()
+        model = nn.DataParallel(model, device_ids=None)
+    return model, model.parameters()

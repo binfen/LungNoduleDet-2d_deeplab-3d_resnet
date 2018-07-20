@@ -1,0 +1,74 @@
+# -*- encoding: utf-8 -*-
+'''
+@time: 2018  下午3:45
+
+@author: wowjoy
+'''
+
+import os
+import cv2
+import numpy as np
+import pandas as pd
+from random import shuffle
+import scipy.ndimage
+import multiprocessing
+
+def resize(data,size=32):
+    image = np.zeros(shape=[size,size,size])
+    height,width,depth = data.shape
+    image[:height,:width,:depth]=data
+    return image
+
+def soft_l1(img, a, b, w):
+    img_o = img.copy()
+    img_o = np.float32(img_o)
+    if np.sum(img_o > b):
+        x = img_o[img_o > b]
+        img_o[img_o > b] = b + w / (1 + np.exp((b - x) / w)) - w / 2
+    if np.sum(img_o < a):
+        x = img_o[img_o < a]
+        img_o[img_o < a] = a + w / (1 + np.exp((a - x) / w)) - w / 2
+    img_o = img_o - (a - w / 2)
+    img_o = img_o / (b - a + w) * 255
+    
+    return img_o.astype(np.uint8)
+
+def creat_sample(l):
+    i, x, y, z, k = l
+    data = np.load(os.path.join(data_ip, name + '.npy'))
+    if data[y - k:y + k, x - k:x + k, z - k:z + k].shape == (size, size, size):
+        nodule = data[y - k:y + k, x - k:x + k, z - k:z + k]
+    else:
+        nodule = resize(data[y - k:y + k, x - k:x + k, z - k:z + k],2*k)
+    return nodule
+
+def get_predict_sets(csv_file, seg_data, k = 16):
+    nodule_list = []
+    x = anno_info['voxelX'].values
+    y = anno_info['voxelY'].values
+    z = anno_info['voxelZ'].values
+    #r = anno_info['voxelR'].values
+    jobs = []
+    for i in range(len(csv_file)):
+        nodule = creat_sample(i,(int(x[i]),int(y[i]),int(z[i]),k)
+        nodule_list.append(nodule)
+    return nodule_list
+    
+if __name__ == '__main__':
+    
+    result = get_predict_sets()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

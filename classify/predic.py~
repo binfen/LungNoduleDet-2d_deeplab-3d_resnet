@@ -1,0 +1,52 @@
+#-*- coding:utf-8 -*-
+import torch
+from torch.autograd import Variable
+import torch.nn.functional as F
+import numpy as np
+import time
+import os
+import sys
+import json
+
+from utils import AverageMeter
+
+def test(data_loader, model, opt):
+    print('test')
+
+    model.eval()
+
+    batch_time = AverageMeter()
+    data_time = AverageMeter()
+
+    end_time = time.time()
+    test_results = []
+    f = open(os.path.join(opt.result_path, 'results.txt'),'w')
+    f.write('name'+'\t'+'label'+'\t'+'prob'+'\t'+'pred'+'\n')
+    for i, (names, targets) in enumerate(data_loader):
+        data_time.update(time.time() - end_time)
+        inputs = np.zeros(shape=[len(names),1,32,32,32])
+        for k, name in enumerate(names):
+            inputs[k,:] = np.load(name)
+        inputs = torch.from_numpy(inputs)
+        inputs = Variable(inputs, volatile=True).type(torch.float32)
+
+        outputs = model(inputs)
+        if not opt.no_softmax_in_test:
+            outputs = F.softmax(outputs)
+
+        for j in range(outputs.size(0)):
+            name = os.path.basename(names[j])
+            label = targets[j]
+            prob, pred = torch.topk(outputs[j], k=1)
+            f.write(name+','+str(label.numpy())+','+str(prob.data.cpu().numpy())+','+str(pred.data.cpu().numpy())+'\n')
+        batch_time.update(time.time() - end_time)
+        end_time = time.time()
+
+        print('[{}/{}]\t'
+              'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+              'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'.format(
+                  i + 1,
+                  len(data_loader),
+                  batch_time=batch_time,
+                  data_time=data_time))
+    f.close()

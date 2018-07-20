@@ -1,0 +1,103 @@
+#-*- coding:utf-8 -*-
+import os
+import sys
+import cv2
+import json
+import time
+import numpy as np
+import torch
+import torch.utils.data
+from torch import nn
+from utils import *
+from opts import parse_opts
+from multiprocessing import pool
+import model
+import segment
+import classify
+import pdb
+
+def predict_demo(bucket_name, slice_id):
+
+    opt = parse_opts()
+    opt.reload_path = os.path.join(opt.root_path, opt.reload_path)
+    opt.save_path = os.path.join(opt.root_path, opt.data_path)
+    
+    #download dcm files form S3
+    download_dcm(bucket_name, slice_id, opt.save_path)
+
+    #TODO:此处提取npy, mask,info 可以改写成多线程.因为数据提取非常耗时
+    #preprocess dcm files
+    dcm_file = os.path.join(opt.save_path, bucket_name)
+    image,data,mask,info = get_patient_ct_data_mask_info_mhd(dcm_file,opt)
+
+    '''#########################################################################'''
+         # reload trained deeplab model used to make segment results#
+    '''#########################################################################'''
+    seg_beg_time = time.time()
+    seg_reload_file = os.path.join(opt.reload_path, opt.seg_reload_model)
+    seg_model,_ = model.generate_model(opt, phase='segment')  
+    checkpoint = torch.load(seg_reload_file)   
+    state_dict = checkpoint['state_dict']  
+    if not opt.no_cuda:   #使用GPU
+        seg_model.load_state_dict(state_dict)
+    else:                 #使用CPU:
+        new_state_dict = OrderedDict()
+        for k, v in state_dict.items():
+            name = k[7:] # remove `module.`
+            new_state_dict[name] = v
+        seg_model.load_state_dict(new_state_dict)
+    print('reload segment model cost time:',time.time()-seg_beg_time)
+
+    seg_loader = get_seg_inputs(data, opt)
+    print('get segment data cost time:',time.time()-seg_beg_time)
+
+    seg_preds = segment.predict(seg_loader, seg_model, opt)
+    seg_results = get_seg_outputs(seg_preds, mask, opt.seg_pred_thresh)
+    print('segment cost time:',time.time()-seg_beg_time)    
+
+    '''#########################################################################'''
+         # reload trained resnet model used to make classify results#
+    '''#########################################################################'''
+
+    cla_beg_time = time.time()
+    cla_reload_file = os.path.join(opt.reload_path, opt.cla_reload_model)
+    cla_model,_ = model.generate_model(opt, phase='classify')  
+
+    # 'loading checkpoint
+    checkpoint=torch.load(cla_reload_file)
+    state_dict = checkpoint['state_dict']  
+    if not opt.no_cuda:   #使用GPU
+        cla_model.load_state_dict(state_dict)
+    else:                 #使用CPU:
+        new_state_dict = OrderedDict()
+        for k, v in state_dict.items():
+            name = k[7:] # remove `module.`
+            new_state_dict[name] = v
+        cla_model.load_state_dict(new_state_dict)
+    print('reload classify model cost time:',time.time()-cla_beg_time)
+
+    cla_loader = sigthread_get_cla_inputs(data, seg_results, opt)
+    print('get classify data cost time:',time.time()-cla_beg_time)
+
+    cla_prob,cla_pred = classify.predict(cla_loader, cla_model, opt)
+    print('classify cost time:',time.time()-cla_beg_time)
+
+    ID=dcm_file.split('/')[-1]
+    results = get_cla_outpus(cla_prob,cla_pred,seg_results,info,ID)
+    results.to_csv('results.csv',index=False)
+    print('predict cost all time:',time.time()-load_data_beg_time)
+    show_predict_results(image, results,opt.save_path)
+
+if __name__ == '__main__':
+    dcm_file = 'datas/mhd_raw/LKDS-00995.mhd'
+    bucket_name=''
+    slice_id = []
+    predict_demo(dpredict_demo(bucket_name, slice_id))
+    
+
+
+
+
+
+
+

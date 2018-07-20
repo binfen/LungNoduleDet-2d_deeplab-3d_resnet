@@ -1,0 +1,48 @@
+import numpy as np
+
+import torch
+from torch import nn
+import math
+
+
+
+def weightedMSE(input, target, weight=None, normalize_weight=False):
+    import torch
+    # normalize by batchsize
+    if weight is None:
+        return torch.sum((input - target) ** 2)/input.size(0)
+    else:
+        if not normalize_weight:
+            return torch.sum(weight * (input - target) ** 2)/input.size(0)
+        else:
+            return torch.mean(weight * (input - target) ** 2)
+
+def weightedMSE_np(input, target, weight=None, normalize_weight=False):
+    # normalize by batchsize
+    if weight is None:
+        return np.sum((input - target) ** 2)/input.shape[0]
+    else:
+        if not normalize_weight: # malis loss: weight already normalized
+            return np.sum(weight * (input - target) ** 2)/input.shape[0]
+        else: # standard avg error
+            return np.mean(weight * (input - target) ** 2)
+
+
+
+
+def iou(box0, box1):
+    r0 = box0[3] / 2
+    s0 = box0[:3] - r0
+    e0 = box0[:3] + r0
+
+    r1 = box1[3] / 2
+    s1 = box1[:3] - r1
+    e1 = box1[:3] + r1
+
+    overlap = []
+    for i in range(len(s0)):
+        overlap.append(max(0, min(e0[i], e1[i]) - max(s0[i], s1[i])))
+
+    intersection = overlap[0] * overlap[1] * overlap[2]
+    union = box0[3] * box0[3] * box0[3] + box1[3] * box1[3] * box1[3] - intersection
+    return intersection / union

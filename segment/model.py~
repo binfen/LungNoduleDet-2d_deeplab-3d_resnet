@@ -1,0 +1,15 @@
+import torch
+from torch import nn
+import os,sys
+sys.path.append(os.path.abspath('*'))
+from models import unet_resnet
+
+
+def generate_model(opt):
+    assert opt.model in ['unet_resnet']
+    model = unet_resnet.Net(num_classes=opt.n_classes)
+    from models.resnet import get_fine_tuning_parameters
+    if not opt.no_cuda:
+        model = model.cuda()
+        model = nn.DataParallel(model, device_ids=None)
+    return model, model.parameters()

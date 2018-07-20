@@ -1,0 +1,90 @@
+#-*- coding:utf-8 -*-
+import os
+import sys
+import cv2
+import json
+import time
+import numpy as np
+import torch
+import torch.utils.data
+from torch import nn
+from utils import *
+from opts import parse_opts
+from multiprocessing import pool
+import model
+import segment
+import classify
+import pdb
+
+def predict_demo(dcm_file):
+    beg_time = time.time()
+    opt = parse_opts()
+    opt.reload_path = os.path.join(opt.root_path, opt.reload_path)
+    #opt.image_path = os.path.join(opt.root_path,opt.image_path)
+    #opt.mask_path = os.path.join(opt.root_path,opt.mask_path)
+
+    opt.image_path = os.path.join(opt.root_path,'../../test_data/'+opt.image_path)
+    opt.mask_path = os.path.join(opt.root_path,'../../test_data/'+opt.mask_path)
+
+    '''#########################################################################'''
+         # reload trained deeplab model used to make segment results#
+    '''#########################################################################'''
+    relaod_beg_time = time.time()
+    seg_reload_file = os.path.join(opt.reload_path, opt.seg_reload_model)
+    seg_model,_ = model.generate_model(opt, phase='segment')  
+    checkpoint = torch.load(seg_reload_file)   
+    state_dict = checkpoint['state_dict']  
+    if not opt.no_cuda:   #使用GPU
+        seg_model.load_state_dict(state_dict)
+    else:                 #使用CPU:
+        new_state_dict = OrderedDict()
+        for k, v in state_dict.items():
+            name = k[7:] # remove `module.`
+            new_state_dict[name] = v
+        seg_model.load_state_dict(new_state_dict)
+
+    cla_reload_file = os.path.join(opt.reload_path, opt.cla_reload_model)
+    cla_model,_ = model.generate_model(opt, phase='classify')  
+    # 'loading checkpoint
+    checkpoint=torch.load(cla_reload_file)
+    state_dict = checkpoint['state_dict']  
+    if not opt.no_cuda:   #使用GPU
+        cla_model.load_state_dict(state_dict)
+    else:                 #使用CPU:
+        new_state_dict = OrderedDict()
+        for k, v in state_dict.items():
+            name = k[7:] # remove `module.`
+            new_state_dict[name] = v
+        cla_model.load_state_dict(new_state_dict)
+    print('reload segment model cost time:',time.time()-reload_beg_time)
+    results = pd.DataFrame()
+    names = os.listdir(opt.image_path)
+    for name in names:
+        predict_beg_time = tme.time()
+        image_path = os.path.join(opt.image_path,name)
+        mask_path = os.path.join(opt.mask_path,name)
+        image,mask = get_patient_image_mask(image_path,mask_path, opt.seg_sample_size)
+
+        seg_loader = get_seg_inputs(image, opt)
+        seg_preds = segment.predict(seg_loader, seg_model, opt)
+        seg_results = get_seg_outputs(seg_preds, mask, opt.seg_pred_thresh)
+        
+        cla_loader = sigthread_get_cla_inputs(image, seg_results, opt)
+        cla_prob,cla_pred = classify.predict(cla_loader, cla_model, opt)
+        cla_results = get_cla_outpus(cla_prob,cla_pred,seg_results)
+        ID=name.split('.')[0]
+
+        results.append(cla_results)
+        print('predict cost all time:',time.time()-predict_beg_time)
+
+if __name__ == '__main__':
+    dcm_file = 'datas/mhd_raw/LKDS-00995.mhd'
+    predict_demo(dcm_file)
+    
+
+
+
+
+
+
+

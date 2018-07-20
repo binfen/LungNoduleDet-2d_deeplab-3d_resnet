@@ -1,0 +1,341 @@
+#-*-coding: utf-8 -*-
+'''
+@time: 2018.6.11 14:19
+@author: wowjoy
+'''
+
+import os
+import numpy as np
+import pandas as pd
+import SimpleITK as sitk
+import torch.utils.data
+from threading import Thread
+from multiprocessing import cpu_count,Pool,Process
+from multiprocessing.dummy import Pool as TheadPool
+from sklearn.cluster import DBSCAN
+from skimage.measure import label, regionprops
+from skimage.segmentation import clear_border
+from skimage.morphology import ball, disk, remove_small_holes
+from skimage.morphology import binary_dilation, binary_erosion, binary_closing
+
+def soft_l1(img, a, b, w):
+    img_o = img.copy()
+    img_o = np.float32(img_o)
+    if np.sum(img_o > b):
+        x = img_o[img_o > b]
+        img_o[img_o > b] = b + w / (1 + np.exp((b - x) / w)) - w / 2
+    if np.sum(img_o < a):
+        x = img_o[img_o < a]
+        img_o[img_o < a] = a + w / (1 + np.exp((a - x) / w)) - w / 2
+    img_o = img_o - (a - w / 2)
+    img_o = img_o / (b - a + w) * 255
+    return img_o.astype(np.uint8)
+
+def Resample(image, spacing, new_thickness=[1, 1, 1]):
+    # Determine current pixel spacing
+    resize_factor = spacing / new_thickness
+    new_real_shape = image.shape * resize_factor
+    new_shape = np.round(new_real_shape)
+
+    real_resize_factor = new_shape / image.shape
+    image = scipy.ndimage.interpolation.zoom(image, real_resize_factor, mode='nearest').astype(np.float32)
+    return image
+
+def padd_zero(data, size):
+    if len(data.shape)==3:
+        image = np.zeros(shape=[size, size,size])
+        height, width, depth= data.shape
+        image[:height, :width,:depth] = data
+        return image
+    elif len(data.shape)==2:
+        image = np.zeros(shape=[size, size])
+        height, width= data.shape
+        image[:height, :width] = data
+        return image
+
+def fix_contour_sclice(bi_mask, spacing):
+    spacing_y = spacing[0]
+    spacing_x = spacing[1]
+    disk_12 = disk(6, dtype=np.bool)
+    bi_mask = binary_dilation(bi_mask, disk_12)
+    bi_mask = binary_dilation(bi_mask, disk_12)
+    bi_mask = remove_small_holes(bi_mask, min_size=3/spacing_x*3/spacing_y)
+    bi_mask = binary_erosion(bi_mask, disk_12)
+    bi_mask = binary_erosion(bi_mask, disk_12)
+    return bi_mask
+
+
+def get_mask(vol):
+    '''
+    method:获得肺腔掩码
+    vol:CT体像素数据,三维
+    '''
+    if type(vol) is not np.ndarray:
+        vol = np.array(vol)
+
+    bi_vol = vol < -400
+    for i in range(vol.shape[2]):
+        bi_vol[:, :, i] = clear_border(bi_vol[:, :, i])
+
+    label_vol = label(bi_vol, neighbors=8)
+    regions = regionprops(label_vol)
+    regions = [region for region in regions if region.bbox[0] < 300]#获得连通区面积小于300
+
+    max_region = dict(index=0, area=0)
+    bi_vol = np.zeros(bi_vol.shape, dtype=np.bool)
+    for i, region in enumerate(regions):
+        if region.area > max_region['area']:
+            max_region['index'] = i
+            max_region['area'] = region.area
+    for region in regions:
+        if region.area * 10 > max_region['area']:
+            bi_vol = bi_vol + (label_vol == region.label)
+    for i in range(vol.shape[2]):
+        bi_vol[:, :, i] = fix_contour_sclice(1*bi_vol[:, :, i], spacing=(0.8,0.8,1))
+
+    bi_vol = binary_closing(bi_vol, ball(3))
+    bi_vol = binary_dilation(bi_vol, ball(1))
+    bi_vol = bi_vol > 0
+    return bi_vol
+
+def read_slice_dcms(dcm_path,thickness_z):
+    reader = sitk.ImageSeriesReader()
+    dicom_names = reader.GetGDCMSeriesFileNames(dcm_path)
+    reader.SetFileNames(dicom_names)
+    itk_img = reader.Execute()
+
+    thickness = np.array(itk_img.GetSpacing())
+    transform = np.array(itk_img.GetDirection())
+    offset = np.array(itk_img.GetOrigin())
+    # transform是旋转矩阵
+    transformX = np.around(float(transform[0]))
+    transformY = np.around(float(transform[4]))
+    transformZ = np.around(float(transform[8]))
+    # offset是原点矩阵
+    offsetX = float(offset[0])
+    offsetY = float(offset[1])
+    offsetZ = float(offset[2])
+    # thickness是层厚矩阵
+    thicknessX = float(thickness[0])
+    thicknessY = float(thickness[1])
+    thicknessZ = float(thickness[2])
+    info=(transformX,transformY,transformZ,offsetX,offsetY,offsetZ,thicknessX,thicknessY,thicknessZ)
+
+    old_array = sitk.GetArrayFromImage(itk_img) # z, y, x
+    new_array = old_array.transpose(1,2,0)
+    if thickness[2]<=thickness_z:
+        res_array = new_array
+    else:
+        new_thickness = [old_spaceing[0],old_spacing[1],thickness_z]
+        res_array = Resample(new_array, thickness, new_thickness=new_thickness)
+    res_array = soft_l1(res_array, -1350, 150, 150.0)
+    mask = get_mask(res_array)
+
+    return res_array, mask, info
+
+#此处改成多线程,提高数据读取速度
+def multhred_read_slice_dcms(dcm_path,thickness_z):
+    def func1(job):
+        itk_img, thicckness,thickness_z=job
+        
+        old_array = sitk.GetArrayFromImage(itk_img) # z, y, x
+        new_array = old_array.transpose(1,2,0)
+        if thickness[2]<=thickness_z:
+            res_array = new_array
+        else:
+            new_thickness = [old_spaceing[0],old_spacing[1],thickness_z]
+            res_array = Resample(new_array, thickness, new_thickness=new_thickness)
+        res_array = soft_l1(res_array, -1350, 150, 150.0)
+        mask = get_mask(res_array) 
+        return new_array, mask
+
+    def func2(job):
+        transform,offset,thickness=job
+        # transform是旋转矩阵
+        transformX = np.around(float(transform[0]))
+        transformY = np.around(float(transform[4]))
+        transformZ = np.around(float(transform[8]))
+        # offset是原点矩阵
+        offsetX = float(offset[0])
+        offsetY = float(offset[1])
+        offsetZ = float(offset[2])
+        # thickness是层厚矩阵
+        thicknessX = float(thickness[0])
+        thicknessY = float(thickness[1])
+        thicknessZ = float(thickness[2])
+        info=(transformX,transformY,transformZ,offsetX,offsetY,offsetZ,thicknessX,thicknessY,thicknessZ)
+        return info
+
+    reader = sitk.ImageSeriesReader()
+    dicom_names = reader.GetGDCMSeriesFileNames(dcm_path)
+    reader.SetFileNames(dicom_names)
+    itk_img = reader.Execute()
+
+    thickness = np.array(itk_img.GetSpacing())
+    transform = np.array(itk_img.GetDirection())
+    offset = np.array(itk_img.GetOrigin())
+    pool = Pool(2)
+    job1=(itk_img, thicckness,thickness_z)
+    job2=(transform, offset,thickness)
+    res1=pool.apply_async(func1,(job1,))
+    res2=pool.apply_async(func2,(job2,))
+    pool.close()
+    pool.join()
+    res_array, mask = res1._value
+    info = res2._value
+    return res_array, mask, info
+
+
+def get_seg_inputs(image, opt):
+    if image.shape[0]!=opt.seg_sample_size:
+        image = cv2.resize(image,(opt.seg_sample_size,opt.seg_sample_size, image.shape[:-1]), 2)
+    seg_image = torch.from_numpy(image)
+    import pdb
+    pdb.set_trace()
+    ids = np.arange(image.shape[:-1])
+    seg_tensor = torch.utils.data.TensorDataset(seg_image, ids) 
+
+    seg_loader = torch.utils.data.DataLoader(
+        seg_tensor,
+        batch_size=opt.seg_batch_size,
+        shuffle=False,
+        num_workers=opt.n_threads,
+        pin_memory=True)
+    return seg_loader
+
+def get_seg_outputs(preds, ids, mask, seg_pred_thresh):
+    '''
+    method: get segment result for classify
+    preds: batch*height*width
+    seg_outs: csv file, x,y,z,d_x,d_y, prob.最终的分割预测结果,用于分类
+    '''
+    
+    #获得candidate 分割位置
+    seg_results=pd.DataFram()
+
+    if type(preds) is not np.ndarray:
+        vol = np.array(vol)
+    preds = preds*mask
+
+    for i, pred in enumerate(preds):
+        _, contours, _ = cv2.findContours(255 * np.uint8(pred >= seg_pred_thresh), cv2.RETR_TREE,cv2.CHAIN_APPROX_SIMPLE)
+        for cnt in contours:
+            # 计算轮廓的半径
+            w_min, h_min, w, h = cv2.boundingRect(contours[i]) 
+            w_max, h_max = w_min+w, h_min+h
+            prob = np.max(single_pred[h_min:h_max + 1, w_min:w_max + 1])
+     
+            x = np.int(np.ceil((w_max + w_min) / 2))
+            y = np.int(np.ceil((h_max + h_min) / 2))
+            z=  np.int(ids[i])
+            d = np.int(np.max([w, h]))
+
+            if mask[y, x, z] == 0:
+                pass
+            else:
+                seg_results.loc[i,'x']=x
+                seg_results.loc[i,'y']=y
+                seg_results.loc[i,'z']=z
+                seg_results.loc[i,'dx']=w
+                seg_results.loc[i,'dy']=h
+                seg_results.loc[i,'prob']=prob
+
+    #聚类获得最终分割结果
+    seg_outs = pd.DataFrame(columns=seg_results.columns)
+    preds['cluster']=0
+    data = preds[['x','y','z']]
+    dbscan = DBSCSN(eps=6, min_sample=1)
+    preds['cluster'] = dbscan.fit_predict(data)
+    for i in preds.cluster.unique():
+        voxel = preds.loc[preds.cluster==i,['x','y','z','dx','dy','prob']].values.mean(axis=0)
+        seg_outs['x']=voxel[0]
+        seg_outs['y']=voxel[1]
+        seg_outs['z']=voxel[2]
+        seg_outs['dx']=voxel[3]
+        seg_outs['dy']=voxel[4]
+        seg_outs['prob']=voxel[5]
+    return seg_outs
+
+def get_cla_single_sample(job):
+    image, x, y, z, dx, dy, size = job
+    if max(dx,dy) < size:
+        r = size / 2
+        data = image[y - r:y + r, x - r:x + r, z - r:z + r]
+        if data.shape == (size, size, size):
+            sample = data
+        else:
+            sample = padd_zero(data,size)
+    else:
+        r = max(dx,dy)/2
+        data = image[y - r:y + r, x - r:x + r, z - r:z + r]
+        if data.shape == (2*r,2*r,2*r):
+            sample = data
+        else:
+            data = padd_zero(data,2*r)
+            sample = cv2.resize(data, (size,size,size),2)
+    return sample
+
+def get_cla_inputs(image, seg_outs, opt):
+    size = opt.cls_sample_size
+    xs = seg_outs['x'].values
+    ys = seg_outs['y'].values
+    zs = seg_outs['z'].values
+    dxs = seg_outs['dx'].values
+    dys = seg_outs['dy'].values
+    cla_samples = []
+    for i in range(len(xs)):
+        job = (image,int(xs[i]),int(ys[i]),int(zs[i]),int(dxs[i]),int(dys[i]), size)
+        cla_samples.append(get_cla_single_sample(job))
+    cla_samples = torch.from_numpy(np.array(cla_samples))
+    cla_tensor = torch.utils.data.TensorDataset(cla_samples) 
+    cla_loader = torch.utils.data.DataLoader(
+        cla_tensor,
+        batch_size=opt.cla_batch_size,
+        shuffle=False,
+        num_workers=opt.n_threads,
+        pin_memory=True)
+    return cla_loader
+class AverageMeter(object):
+    """Computes and stores the average and current value"""
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+class Logger(object):
+
+    def __init__(self, path, header):
+        self.log_file = open(path, 'a')
+        self.logger = csv.writer(self.log_file, delimiter='\t')
+
+        self.logger.writerow(header)
+        self.header = header
+
+    def __del(self):
+        self.log_file.close()
+
+    def log(self, values):
+        write_values = []
+        for col in self.header:
+            assert col in values
+            write_values.append(values[col])
+
+        self.logger.writerow(write_values)
+        self.log_file.flush()
+
+def load_value_file(file_path):
+    with open(file_path, 'r') as input_file:
+        value = float(input_file.read().rstrip('\n\r'))
+    return value
+

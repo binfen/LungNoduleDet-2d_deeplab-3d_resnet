@@ -1,0 +1,88 @@
+#-*- coding:utf-8 -*-
+import os
+import sys
+import cv2
+import json
+import time
+import numpy as np
+import torch
+import torch.utils.data
+from torch import nn
+from utils import *
+from predict_opts import parse_opts
+import model
+import seg_predict
+import cla_predict
+import pdb
+
+def predict_demo(dcm_file):
+    #pdb.set_trace()
+    load_data_beg_time = time.time()
+    opt = parse_opts()
+    opt.reload_path = os.path.join(opt.root_path, opt.reload_path)
+
+    image, mask, info = read_slice_dcms(dcm_file,opt.z_thickness)
+    print('load predict data cost time:',time.time()-load_data_beg_time)
+
+    '''#########################################################################'''
+         # reload trained deeplab model used to make segment results#
+    '''#########################################################################'''
+    seg_beg_time = time.time()
+    seg_reload_file = os.path.join(opt.reload_path, opt.seg_reload_model)
+    seg_model,_ = model.generate_model(opt, phase='segment')
+    print(seg_model)  
+
+    print('loading checkpoint {}'.format(seg_reload_file))
+    checkpoint = torch.load(seg_reload_file)   
+    state_dict = checkpoint['state_dict']  
+    if not opt.no_cuda:   #使用GPU
+        seg_model.load_state_dict(state_dict)
+    else:                 #使用CPU:
+        new_state_dict = OrderedDict()
+        for k, v in state_dict.items():
+            name = k[7:] # remove `module.`
+            new_state_dict[name] = v
+        seg_model.load_state_dict(new_state_dict)
+
+    seg_loader = get_seg_inputs(image, opt)
+    seg_preds, ids = seg_predict.predict(seg_loader, model, opt)
+    seg_results = get_seg_outputs(seg_preds, ids, mask, opt.seg_pred_thresh)
+    print('segment cost time:',time.time()-seg_beg_time)    
+
+    '''#########################################################################'''
+         # reload trained resnet model used to make classify results#
+    '''#########################################################################'''
+    cls_beg_time = time.time()
+    cla_reload_file = os.path.join(opt.reload_path, opt.cla_reload_model)
+    cla_model,_ = model.generate_model(opt, phase='classify')
+    print(cla_model)  
+
+    print('loading checkpoint {}'.format(cla_reload_file))
+    checkpoint=torch.load(cla_reload_file)
+    state_dict = checkpoint['state_dict']  
+    if not opt.no_cuda:   #使用GPU
+        cla_model.load_state_dict(state_dict)
+    else:                 #使用CPU:
+        new_state_dict = OrderedDict()
+        for k, v in state_dict.items():
+            name = k[7:] # remove `module.`
+            new_state_dict[name] = v
+        cla_model.load_state_dict(new_state_dict)
+
+    cla_loader = get_seg_inputs(image, seg_results, opt)
+    cla_results = cla_predict.predict(cla_loader, model, opt)
+    print('classify cost time:',time.time()-cla_beg_time)
+    
+    print('predict cost time:',time.time()-load_data_beg_time)
+
+if __name__ == '__main__':
+    dcm_file = 'predict_datas/0001'
+    predict_demo(dcm_file)
+    
+
+
+
+
+
+
+

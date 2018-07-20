@@ -1,0 +1,80 @@
+import torch
+from torch.autograd import Variable
+import os
+import sys
+import numpy as np
+from torch import nn
+from utils import *
+
+
+def train_epoch(epoch, data_loader, model, criterion, optimizer, opt,
+                epoch_logger, batch_logger):
+    print('train at epoch {}'.format(epoch))
+
+    model.train()
+    losses = AverageMeter()
+    recalles = AverageMeter()
+    accuracies = AverageMeter()
+
+
+    for i, (names, targets) in enumerate(data_loader):
+        inputs = np.zeros(shape=[len(names),1,opt.sample_size,opt.sample_size,opt.sample_size])
+        for k, name in enumerate(names):
+            inputs[k,:] = np.load(name)
+        inputs = torch.from_numpy(inputs)
+
+        if not opt.no_cuda:
+            inputs = inputs.cuda()
+            targets = targets.cuda(async=True)
+
+        inputs = Variable(inputs).type(torch.float32)        
+        targets = Variable(targets).type(torch.long)        
+        outputs = model(inputs)
+
+        loss = criterion(nn.LogSoftmax(dim=1)(outputs), targets)
+
+        recall = calculate_recall(outputs, targets)
+        acc = calculate_accuracy(outputs, targets)
+
+        losses.update(loss.item(), inputs.size(0))
+        recalles.update(recall, inputs.size(0))
+        accuracies.update(acc, inputs.size(0))
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        batch_logger.log({
+            'epoch': epoch,
+            'batch': i + 1,
+            'iter': (epoch - 1) * len(data_loader) + (i + 1),
+            'loss': losses.val,
+            'recall': recalles.val,
+            'acc': accuracies.val,
+            'lr': optimizer.param_groups[0]['lr']
+        })
+ 
+        print('Epoch: [{0}][{1}/{2}]\t'
+              'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+              'Recall {recall.val:.4f} ({recall.avg:.4f})\t'
+              'Acc {acc.val:.3f} ({acc.avg:.3f})'.format(epoch,i + 1,len(data_loader),loss=losses,recall=recalles,acc=accuracies))
+
+
+    epoch_logger.log({
+        'epoch': epoch,
+        'loss': losses.avg,
+        'recall': recalles.avg,
+        'acc': accuracies.avg,
+        'lr': optimizer.param_groups[0]['lr']
+    })
+
+    if epoch % opt.checkpoint == 0:
+        save_file_path = os.path.join(opt.savemodel_path,
+                                      'save_{}.pth'.format(epoch))
+        states = {
+            'epoch': epoch + 1,
+            'arch': opt.arch,
+            'state_dict': model.state_dict(),
+            'optimizer': optimizer.state_dict(),
+        }
+        torch.save(states, save_file_path)

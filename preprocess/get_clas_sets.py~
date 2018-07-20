@@ -1,0 +1,143 @@
+# -*- encoding: utf-8 -*-
+'''
+@time: 2018  下午3:45
+
+@author: wowjoy
+'''
+
+import os
+import numpy as np
+import pandas as pd
+import multiprocessing
+from multiprocessing.dummy import Pool as ThreadPool
+import pdb
+
+main_ip = os.path.join(os.getcwd(),'../data/origin/')
+data_ip = os.path.join(main_ip,'image')
+csv_ip = os.path.join(main_ip,'csv')
+
+main_op = os.path.join(os.getcwd(), '../data/classify')
+pos_data_op = os.path.join(main_op,'image_pos')
+neg_data_op = os.path.join(main_op,'image_neg')
+
+if not os.path.exists(pos_data_op):
+    os.makedirs(pos_data_op)
+if not os.path.exists(neg_data_op):
+    os.makedirs(neg_data_op)
+
+def resize(data,size=32):
+    image = np.zeros(shape=[size,size,size])
+    height,width,depth = data.shape
+    image[:height,:width,:depth]=data
+    return image
+
+def soft_l1(img, a, b, w):
+    img_o = img.copy()
+    img_o = np.float32(img_o)
+    if np.sum(img_o > b):
+        x = img_o[img_o > b]
+        img_o[img_o > b] = b + w / (1 + np.exp((b - x) / w)) - w / 2
+    if np.sum(img_o < a):
+        x = img_o[img_o < a]
+        img_o[img_o < a] = a + w / (1 + np.exp((a - x) / w)) - w / 2
+    img_o = img_o - (a - w / 2)
+    img_o = img_o / (b - a + w) * 255
+    return img_o.astype(np.uint8)
+
+def create_singledata(data, x, y, z, size=32):
+    r = size / 2
+    if data[y - r:y + r, x - r:x + r, z - r:z + r].shape == (size, size, size):
+        nodule = data[y - r:y + r, x - r:x + r, z - r:z + r]
+    else:
+        nodule = resize(data[y - r:y + r, x - r:x + r, z - r:z + r],size)
+    nodule = soft_l1(nodule, -1350, 150, 150.0)
+    return nodule
+
+def get_pos_set(pos_job):
+    old_name,pos_num,x,y,z,size =pos_job
+    print('get classify annotations, loop:', pos_num)
+    data = np.load(os.path.join(data_ip, old_name))
+    nodule = create_singledata(data, x, y, z, size)
+    table = []
+    # 数据增强：翻转
+    table.append(nodule)
+    table.append(nodule[::-1])
+    table.append(nodule[:, ::-1])
+    table.append(nodule[:, :, ::-1])
+    table.append(nodule[::-1, ::-1])
+    table.append(nodule[:, ::-1, ::-1])
+    table.append(nodule[::-1, :, ::-1])
+    table.append(nodule[::-1, ::-1, ::-1])
+    for k, data in enumerate(table):
+        new_name = '%06d.npy'%(8*(pos_num-1)+k+1)
+        np.save(os.path.join(pos_data_op, new_name), data)
+
+def get_neg_set(neg_job):
+    old_name, neg_num, x, y, z, size =neg_job
+    print('get classify annotations, loop:', neg_num)
+    new_name = '%06d.npy' % neg_num
+    data = np.load(os.path.join(data_ip, old_name))
+    nodule = create_singledata(data, x, y, z, size)
+    np.save(os.path.join(neg_data_op, new_name), nodule)
+
+
+
+def get_classify_set():
+
+    size =32
+    pos_jobs = []
+    pos_num = 0    
+    #get positive samples
+    a_info = pd.read_csv(os.path.join(csv_ip, 'annotations_detail.csv'),dtype={'ID':str})
+    a_x = a_info['voxelX'].values
+    a_y = a_info['voxelY'].values
+    a_z = a_info['voxelZ'].values
+    a_id = a_info['ID'].values
+    for i in range(a_id.shape[0]):#
+        old_name = a_id[i]+'.npy'
+        pos_num += 1
+        pos_jobs.append((old_name,pos_num,int(a_x[i]),int(a_y[i]),int(a_z[i]),size))
+
+    #获得来自candidates的样本
+    neg_jobs = []
+    neg_num = 0
+    c_info = pd.read_csv(os.path.join(csv_ip, 'candidates_detail.csv'),dtype={'ID':str})
+    c_x = c_info['voxelX'].values
+    c_y = c_info['voxelY'].values
+    c_z = c_info['voxelZ'].values
+    c_id = c_info['ID'].values
+    c_label = c_info['class'].values
+    for j in range(c_id.shape[0]):#
+        old_name = c_id[j]+'.npy'
+        if c_label[j] == 1:
+            pos_num += 1
+            pos_jobs.append((old_name,pos_num,int(c_x[j]),int(c_y[j]),int(c_z[j]),size))
+
+        else:
+            neg_num += 1
+            neg_jobs.append((old_name,neg_num,int(c_x[j]),int(c_y[j]),int(c_z[j]),size))
+    #pdb.set_trace()
+    pool = ThreadPool(4)
+    pool.map(get_pos_set,pos_jobs)
+    pool.map(get_neg_set,neg_jobs)
+    pool.close() 
+    pool.join() 
+
+if __name__ == '__main__':
+    get_classify_set()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

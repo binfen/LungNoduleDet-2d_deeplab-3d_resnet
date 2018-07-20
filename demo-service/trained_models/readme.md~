@@ -1,0 +1,3 @@
+相关模型说明
+    cla_save_159.pth:
+        在z方向层厚为1mm的32*32*32的数据集上做分类,正样本来自annotations.csv与candidates.csv的真样本并做翻转增强,负样本全部来自candidates.csv,最终保证正负样本比1:10

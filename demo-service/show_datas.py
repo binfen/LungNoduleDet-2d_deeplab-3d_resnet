@@ -1,0 +1,50 @@
+# -*- encoding: utf-8 -*-
+'''
+@datatime: '18-6-6 下午8:25'
+
+@author: wowjoy
+'''
+import numpy as np
+import SimpleITK as sitk
+import os
+import cv2
+from time import sleep
+from threading import Thread
+import matplotlib.pyplot as plt
+
+main_ip = os.path.join(os.getcwd(), '../../datas/demo_datas/')
+dcm_names = os.listdir(main_ip)
+j=0
+
+
+def close(ts):
+    sleep(ts)
+    plt.close()
+
+for i, name in enumerate(dcm_names):
+    reader = sitk.ImageSeriesReader()
+    dcm_path =os.path.join(main_ip,name)
+    print(name,dcm_path)
+    dicom_names = reader.GetGDCMSeriesFileNames(dcm_path)
+    reader.SetFileNames(dicom_names)
+    itk_img = reader.Execute()
+
+    old_array = sitk.GetArrayFromImage(itk_img) # z, y, x
+    new_array = old_array.transpose(1,2,0) # y, x, z
+    '''
+    # print(i,name)
+    if name.split('.')[-1]=='npy':
+        data = np.load(os.path.join(main_ip, name))
+    else:
+        data = cv2.imread(os.path.join(main_ip, name),0)
+    '''
+    import pdb
+    #pdb.set_trace()
+    for z in range(new_array.shape[2]):
+        old_data = old_array[z]
+        new_data = new_array[:,:,z]
+        plt.subplot(121),plt.imshow(old_data,'gray'),plt.title('old_data %d'%z)
+        plt.subplot(122),plt.imshow(new_data,'gray'),plt.title('new_data%d'%z)
+        thread1 = Thread(target=close,args=(0.5,))
+        thread1.start()
+        plt.show()

@@ -1,0 +1,35 @@
+#-*- coding: utf-8 -8-
+'''
+@time: 2018.6.11 09:39
+@author: wowjoy
+'''
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+import pdb
+main_ip = os.path.join(os.getcwd(),'../../datas/origin_datas/csv')
+def calcuter_diameter_z(csv_file):
+
+    df_csv = pd.read_csv(csv_file)
+    diam_z = df_csv['r_Z'].values.astype(np.int8)
+    print(len(diam_z))
+    num_hist = np.zeros(shape=[3])
+    for i in range(diam_z.shape[0]):
+        if diam_z[i]<=5:            
+            num_hist[0] += 1
+        elif 5<diam_z[i]<=10:
+            num_hist[1] += 1
+        else:
+            num_hist[2] += 1
+    print(num_hist[0]*1.0/len(diam_z),num_hist[1]*1.0/len(diam_z),num_hist[2]*1.0/len(diam_z))
+    diam_hist = np.array(num_hist)
+    plt.plot(diam_hist)
+    plt.show()
+    pdb.set_trace()
+if __name__ == '__main__':
+    csv_file = os.path.join(main_ip,'annotations_detail.csv')
+    calcuter_diameter_z(csv_file)
+ 
+    

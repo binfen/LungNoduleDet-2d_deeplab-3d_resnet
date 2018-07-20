@@ -1,0 +1,89 @@
+import numpy as np
+import argparse
+import os
+
+import torch
+import torch.nn as nn
+import torch.utils.data
+from net_detector import Net
+def get_args():
+    parser = argparse.ArgumentParser(description='Training Model')
+    args = parser.parse_args()
+    return args
+
+
+def main():
+
+    img_loader =  torch.utils.data.DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn = np_collate,num_workers=num_worker, pin_memory=True)
+    np.random.seed(0)
+    args = get_args()
+    net = Net() 
+    optimizer = torch.optim.Adam([
+        {'params': rest_params},
+        {'params': frozen_params, 'lr':0.0, 'weight_decay':0.0, 'betas':[0.0, 0.0]}],
+        lr=args.lr, betas=betas, weight_decay=args.wd)
+
+    print ' start training'
+    if args.num_gpu>1: 
+        model = nn.DataParallel(model, range(args.num_gpu))
+    model.cuda()
+    
+    if args.phase == 'test':
+        model.eval()
+    else:
+        model.train()
+
+    # Normalize learning rate
+    # args.lr = args.lr * args.batch_size / 2
+    test_iter = test_loader.__iter__() if test_loader is not None else None
+    test_loss = 0
+    volume_id = pre_epoch
+    for iter_id, data in enumerate(train_loader):
+        optimizer.zero_grad()
+        print("do:", volume_id)
+        volume_id += args.batch_size
+
+        # copy data
+        t1 = time.time()
+
+        # Training error
+        #print data[0].shape,data[1].shape,data[2].shape
+        #visSliceSeg(data[0], data[2], offset=[14,44,44],outN='tmp/train_seg'+str(iter_id)+'_'+str(data[3][0][0])+'.png', frame_id=0)
+        #visSliceSeg(data[0], data[1][0][1], offset=[14,44,44],outN='tmp/train_affy'+str(iter_id)+'_'+str(data[3][0][0])+'.png', frame_id=0)
+        #visSliceSeg(data[0], data[2], offset=[6,14,14],outN='result/db/train_'+str(iter_id)+'_'+str(data[3][0][0])+'.png', frame_id=0)
+        #visSlice(data[0][0,0],outN='result/db/train_im.png',frame_id=6)
+        train_vars[0].data.copy_(torch.from_numpy(data[0]))
+        train_loss = forward(model, data, train_vars, loss_w, args)
+
+        # Forward
+        t2 = time.time()
+        # Backward
+        if args.lr > 0:
+            train_loss.backward()
+            optimizer.step()
+
+        t3 = time.time()
+        # Validation error
+        if test_iter is not None and iter_id % 5 == 0:
+            test_img = next(test_iter)
+            #visSliceSeg(test_img[0], test_img[2], offset=[14,44,44],outN='result/db/test_'+str(iter_id)+'_'+str(test_img[3][0][0])+'.png', frame_id=0)
+            train_vars[0].data.copy_(torch.from_numpy(test_img[0]))
+            test_loss = forward(model, test_img, train_vars, loss_w, args).data[0]
+
+        # Print log
+        logger.write("[Volume %d] train_loss=%0.3f test_loss=%0.3f lr=%.5f ModelTime=%.2f TotalTime=%.2f\n" % (volume_id,train_loss.data[0],test_loss,optimizer.param_groups[0]['lr'],t3-t2,t3-t1))
+
+        # Save progress
+        if volume_id % args.volume_save <args.batch_size or volume_id >= args.volume_total:
+            save_checkpoint(model, args.output+('/volume_%d.pth' % (volume_id)), optimizer, volume_id)
+        # Terminate
+        if volume_id >= args.volume_total:
+            break
+
+        # LR update
+        if args.lr > 0:
+            decay_lr(optimizer, args.lr, volume_id, lr_decay[0], lr_decay[1], lr_decay[2])
+    logger.close()
+
+if __name__ == "__main__":
+    main()

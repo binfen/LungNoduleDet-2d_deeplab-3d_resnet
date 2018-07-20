@@ -1,0 +1,27 @@
+import time
+import numpy as np
+from threading import Thread
+from multiprocessing import cpu_count,Pool,Process
+
+
+def func(job):
+    i,dataset=job
+    dataset.append((i))
+    return dataset
+def main():
+    pool=Pool(1)
+    dataset=[]
+
+    jobs=[]
+    for i in range(100):
+        jobs.append((i,dataset))
+        dataset=func((i,dataset))
+    #res1=pool.map(func, jobs)
+    #pool.close()
+    #pool.join()
+    print(len(dataset))
+
+main()
+
+
+

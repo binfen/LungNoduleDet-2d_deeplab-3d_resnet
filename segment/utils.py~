@@ -1,0 +1,147 @@
+#-*- coding: utf-8 -*-
+import csv
+import pandas as pd
+import numpy as np
+import cv2
+from sklearn.cluster import DBSCAN
+class AverageMeter(object):
+    """Computes and stores the average and current value"""
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+class Logger(object):
+
+    def __init__(self, path, header):
+        self.log_file = open(path, 'w')
+        self.logger = csv.writer(self.log_file, delimiter='\t')
+
+        self.logger.writerow(header)
+        self.header = header
+
+    def __del(self):
+        self.log_file.close()
+
+    def log(self, values):
+        write_values = []
+        for col in self.header:
+            assert col in values
+            write_values.append(values[col])
+
+        self.logger.writerow(write_values)
+        self.log_file.flush()
+
+def load_value_file(file_path):
+    with open(file_path, 'r') as input_file:
+        value = float(input_file.read().rstrip('\n\r'))
+    return value
+
+def calculate_iou(pred, target):
+    '''calculate IOU'''
+    p = pred.data.max(1)[1].view(pred.size(0), -1).float()
+    q = target.data.view(target.size(0), -1).float()
+    a = (p * q).sum(1)
+    b = (p.sum(1) + q.sum(1) - (p * q).sum(1))
+    iou = (a / b).mean()
+    return iou
+
+def calculate_redundance(pred, target):
+    ''''calculate false smaple'''
+    p = pred.data.max(1)[1].view(pred.size(0), -1).float()
+    q = target.data.view(target.size(0), -1).float()
+    redun = (p.sum(1) - (p * q).sum(1)).mean()
+    return redun
+
+def calculate_recall(pred, target):
+    ''''calculate recall'''
+    p = pred.data.max(1)[1].view(pred.size(0), -1).float()
+    q = target.data.view(target.size(0), -1).float()
+    a = (p * q).sum(1)
+    b = q.sum(1)
+    recall = (a / (b+1)).mean()
+    return recall
+
+def calculate_precision(pred, target):
+    '''calculate accuracy'''
+    p = pred.data.max(1)[1].view(pred.size(0), -1).float()
+    q = target.data.view(pred.size(0), -1).float()
+    a = (p * q).sum(1)
+    b = p.sum(1) + 1
+    precision = (a / b).mean()
+    return precision
+
+def calculate_accuracy(pred, target):
+    pred = pred.long()
+    target = target.long()
+    p = pred.data.max(1)[1].view(pred.size(0),-1)
+    q = target.data.view(pred.size(0),-1)
+    correct = p.eq(q)
+    n_correct_elems = correct.float().sum().data[0]
+    return n_correct_elems / (p.size(0)*p.size(1))
+
+def get_seg_outputs(preds, ids, mask, seg_pred_thresh):
+    '''
+    method: get segment result for classify
+    preds: batch*height*width
+    seg_outs: csv file, x,y,z,d_x,d_y, prob.最终的分割预测结果,用于分类
+    '''
+    
+    #获得candidate 分割位置
+    seg_results=pd.DataFram()
+
+    if type(preds) is not np.ndarray:
+        vol = np.array(vol)
+    preds = preds*mask
+
+    for i, pred in enumerate(preds):
+        _, contours, _ = cv2.findContours(255 * np.uint8(pred >= seg_pred_thresh), cv2.RETR_TREE,cv2.CHAIN_APPROX_SIMPLE)
+        for cnt in contours:
+            # 计算轮廓的半径
+            w_min, h_min, w, h = cv2.boundingRect(contours[i]) 
+            w_max, h_max = w_min+w, h_min+h
+            prob = np.max(single_pred[h_min:h_max + 1, w_min:w_max + 1])
+     
+            x = np.int(np.ceil((w_max + w_min) / 2))
+            y = np.int(np.ceil((h_max + h_min) / 2))
+            z=  np.int(ids[i])
+            d = np.int(np.max([w, h]))
+
+            if mask[y, x, z] == 0:
+                pass
+            else:
+                seg_results.loc[i,'x']=x
+                seg_results.loc[i,'y']=y
+                seg_results.loc[i,'z']=z
+                seg_results.loc[i,'dx']=w
+                seg_results.loc[i,'dy']=h
+                seg_results.loc[i,'prob']=prob
+
+    #聚类获得最终分割结果
+    seg_outs = pd.DataFrame(columns=seg_results.columns)
+    preds['cluster']=0
+    data = preds[['x','y','z']]
+    dbscan = DBSCAN(eps=6, min_samples=1)
+    preds['cluster'] = dbscan.fit_predict(data)
+    for i in preds.cluster.unique():
+        voxel = preds.loc[preds.cluster==i,['x','y','z','dx','dy','prob']].values.mean(axis=0)
+        seg_outs['x']=voxel[0]
+        seg_outs['y']=voxel[1]
+        seg_outs['z']=voxel[2]
+        seg_outs['dx']=voxel[3]
+        seg_outs['dy']=voxel[4]
+        seg_outs['prob']=voxel[5]
+    return seg_outs
+
+

@@ -1,0 +1,170 @@
+#-*- coding:utf-8 -*-
+import os
+import sys
+import cv2
+import json
+import numpy as np
+import torch
+from torch.autograd import Variable
+import torch.nn.functional as F
+import torch.utils.data
+from torch import nn
+from torch import optim
+from torch.optim import lr_scheduler
+
+from opts import parse_opts
+from model import generate_model
+from predict import predict
+opt = parse_opts()
+def soft_l1(img, a, b, w):
+    img_o = img.copy()
+    img_o = np.float32(img_o)
+    if np.sum(img_o > b):
+        x = img_o[img_o > b]
+        img_o[img_o > b] = b + w / (1 + np.exp((b - x) / w)) - w / 2
+    if np.sum(img_o < a):
+        x = img_o[img_o < a]
+        img_o[img_o < a] = a + w / (1 + np.exp((a - x) / w)) - w / 2
+    img_o = img_o - (a - w / 2)
+    img_o = img_o / (b - a + w) * 255
+    return img_o.astype(np.uint8)
+
+def get_data(image_name, mask_name):
+    if not os.path.exists(image_name):
+        continue
+    patient_image = np.load(image_name)
+
+    if not os.path.exists(mask_name):
+        continue
+    patient_mask = np.load(mask_name)
+
+    if np.max(patient_mask)>1:
+        patient_mask = patient_mask / np.max(patient_mask)
+       
+    for i in range(patient_image.shape[2]):
+        image = patient_image[-i]
+        mask = patient_mask[-i]
+       
+        if image.shape[0]!=opt.sample_size:
+            image = cv2.resize(image, (opt.sample_size,opt.sample_size))
+            mask = cv2.resize(mask, (opt.sample_size,opt.sample_size))
+
+        image = soft_l1(image,-1350,150,150.0)
+        image = np.expand_dims(image,0)
+    return image, mask
+
+def get_seg_outputs(preds, mask, name, seg_pred_thresh):
+    '''
+    method: get segment result for classify
+    preds: batch*height*width
+    seg_outs: csv file, x,y,z,d_x,d_y, prob.最终的分割预测结果,用于分类
+    '''
+    seg_results=pd.DataFram()
+    #获得candidate 分割位置
+    if type(preds) is not np.ndarray:
+        vol = np.array(vol)
+    preds = preds*mask
+
+    for i, pred in enumerate(preds):
+        _, contours, _ = cv2.findContours(255 * np.uint8(pred >= seg_pred_thresh), cv2.RETR_TREE,cv2.CHAIN_APPROX_SIMPLE)
+        for cnt in contours:
+            # 计算轮廓的半径
+            w_min, h_min, w, h = cv2.boundingRect(contours[i]) 
+            w_max, h_max = w_min+w, h_min+h
+            prob = np.max(single_pred[h_min:h_max + 1, w_min:w_max + 1])
+     
+            x = np.int(np.ceil((w_max + w_min) / 2))
+            y = np.int(np.ceil((h_max + h_min) / 2))
+            z=  np.int(ids[i])
+            d = np.int(np.max([w, h]))
+
+            if mask[y, x, z] == 0:
+                pass
+            else:
+                seg_results.loc[i,'x']=x
+                seg_results.loc[i,'y']=y
+                seg_results.loc[i,'z']=z
+                seg_results.loc[i,'dx']=w
+                seg_results.loc[i,'dy']=h
+                seg_results.loc[i,'prob']=prob
+
+    #聚类获得最终分割结果
+    seg_outs = pd.DataFrame(columns=seg_results.columns)
+    preds['cluster']=0
+    data = preds[['x','y','z']]
+    dbscan = DBSCSN(eps=6, min_sample=1)
+    preds['cluster'] = dbscan.fit_predict(data)
+    for i in preds.cluster.unique():
+        voxel = preds.loc[preds.cluster==i,['x','y','z','dx','dy','prob']].values.mean(axis=0)
+        seg_outs['x']=voxel[0]
+        seg_outs['y']=voxel[1]
+        seg_outs['z']=voxel[2]
+        seg_outs['dx']=voxel[3]
+        seg_outs['dy']=voxel[4]
+        seg_outs['prob']=voxel[5]
+    seg_outs['ID']=name[:-4]
+    return seg_outs
+
+
+def predict_demo(image_path, mask_path, seg_pred_thresh=0.7):
+
+    model, parameters = generate_model(opt)
+    print(model)  
+  
+    resume_file = 'save_models/save_160.pth'
+    print('loading checkpoint {}'.format(opt.resume_file))
+    checkpoint = torch.load(opt.resume_file)   
+    opt.begin_epoch = checkpoint['epoch']
+    state_dict = checkpoint['state_dict']  
+
+    if not opt.no_cuda:   #使用GPU
+        model.load_state_dict(state_dict)
+    else:                 #使用CPU:
+        new_state_dict = OrderedDict()
+        for k, v in state_dict.items():
+            name = k[7:] # remove `module.`
+            new_state_dict[name] = v
+        model.load_state_dict(new_state_dict)
+
+
+    #creat predict dataset
+    print('run')
+    seg_outs=pd.DataFram()
+    names = os.listdir(image_path)
+    for name in names:
+        image_name = os.path.join(image_path,name)
+        mask_name = os.path.join(mask_path,name) 
+        image, mask = get_data(image_name, mask_name)
+        image = torch.from_numpy(iamge)
+        datas_tensor = torch.utils.data.TensorDataset(image) 
+        datas_loader = torch.utils.data.DataLoader(datas_tensor,batch_size=opt.val_batch_size,shuffle=False,num_workers=opt.n_threads,pin_memory=True)
+
+        print('patient predict')
+        model.eval()
+        preds = []
+        for image in datas_loader:
+            inputs = Variable(image, volatile=True).type(torch.float32)
+            output = model(inputs)
+
+            if not opt.no_softmax_in_test:
+                output = F.softmax(output)
+
+            pred = outputs.data.max(1)[1].data.cpu().numpy()
+            preds.extend(preds)
+
+        patient_out = get_seg_outputs(preds, mask, name, seg_pred_thresh)
+        seg_outs.append(patient_out)
+    return
+
+if __name__ == '__main__':
+    image_path = '../../origin_datas/image'
+    mask_path = '../../origin_datas/mask'
+    predict_demo(image_path, mask_path)
+    
+
+
+
+
+
+
+

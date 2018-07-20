@@ -1,0 +1,10 @@
+import SimpltITK as sitk
+import numpy
+import os
+
+def get_ct_info(data_inpath):
+    
+    itk_image = sitk.ReadData
+    data = itk_image.GetArrayNumpy()
+    ct_info = itk_image.GetSpacing()
+    return data, ct_info

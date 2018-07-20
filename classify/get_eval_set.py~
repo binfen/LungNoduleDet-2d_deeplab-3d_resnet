@@ -1,0 +1,84 @@
+# -*- encoding: utf-8 -*-
+'''
+@time: 2018  下午3:45
+
+@author: wowjoy
+'''
+
+import os
+import cv2
+import numpy as np
+import pandas as pd
+from random import shuffle
+import scipy.ndimage
+from multiprocessing import Pool
+
+main_ip = '../../origin_datas'
+data_ip = 'image'
+csv_ip = 'csv'
+csv_file = os.path.join(csv_ip,'annotations_detail.csv')
+
+def padd_zero(data,size=32):
+    image = np.zeros(shape=[size,size,size])
+    height,width,depth = data.shape
+    image[:height,:width,:depth]=data
+    return image
+
+def creat_sample(l):
+    name, x, y, z, size = l
+    k = size/2
+    iamge = np.load(os.path.join(data_ip, name))
+    data = [y - k:y + k, x - k:x + k, z - k:z + k].copy()
+    if data.shape != (size, size, size):
+        data = padd_zero(data,size)
+    return data
+
+def get_evl_sets(csv_file):
+    anno_info = pd.read_csv(csv_file,dtype={'ID':str})
+    pool=Pool(8)
+    size=32
+    ids= anno_info['ID'].values
+    xs = anno_info['voxelX'].values
+    ys = anno_info['voxelY'].values
+    zs = anno_info['voxelZ'].values
+    rs = anno_info['voxelR'].values
+    jobs = []
+    for i, name in enumerate(ids):
+        name = name + '.npy'
+        jobs.append(name,(int(x[i]),int(y[i]),int(z[i]), int(rs[i]),size)
+    results = pool.map(creat_sample, jobs)
+    pool.close()
+    pool.join()
+
+    samples = np.array(samples)
+    samples = np.expand_dims(samples,axis=1)
+    samples = torch.from_numpy(samples)
+
+    data_tensor = torch.utils.data.TensorDataset(samples) 
+    data_loader = torch.utils.data.DataLoader(
+        data_tensor,
+        batch_size=opt.cla_batch_size,
+        shuffle=False,
+        num_workers=opt.n_threads,
+        pin_memory=True)
+    return data_loader
+
+    
+    
+if __name__ == '__main__':
+    result = get_predict_sets()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
